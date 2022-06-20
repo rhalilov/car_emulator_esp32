@@ -1,0 +1,6 @@
+[submodule "common/obd/can-tp"]
+	path = common/obd/can-tp
+	url = https://github.com/rhalilov/can-tp.git
+[submodule "common/drivers_esp32"]
+	path = common/drivers_esp32
+	url = https://github.com/rhalilov/drivers_esp32.git
