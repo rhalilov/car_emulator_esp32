@@ -1,0 +1,10 @@
+idf_component_register(SRCS "main.c"
+							"../../common/drivers_esp32/can/can_drv_esp32.c"
+							"../../common/obd/can-tp/can-tp.c"
+							"car_emulator.c"
+							"cantp_esp32.c"
+							"obd.c"
+                    INCLUDE_DIRS "."
+                    		"../../common/drivers_esp32/can"
+                    		"../../common/obd/can-tp"
+                    		)
