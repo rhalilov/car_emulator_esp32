@@ -8,6 +8,8 @@
 #ifndef __CAR_EMULATOR_H_
 #define __CAR_EMULATOR_H_
 
+#define ESP32_IDF_CAN_HAL	1
+
 typedef struct emulator_ctx_c {
 	cantp_rxtx_status_t *cantp_ctx;
 	SemaphoreHandle_t sem;

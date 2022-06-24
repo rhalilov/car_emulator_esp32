@@ -140,6 +140,24 @@ int cantp_can_rx(cantp_can_frame_t *rx_frame, uint32_t tout_us)
 	} else {
 		ticks_to_wait = (tout_us/1000)/portTICK_RATE_MS;
 	}
+#if ESP32_IDF_CAN_HAL
+	twai_message_t rx_msg;
+
+	twai_receive(&rx_msg, ticks_to_wait);
+
+	rx_frame->dlc = rx_msg.data_length_code;
+	rx_frame->rtr = rx_msg.extd;
+	rx_frame->id = rx_msg.identifier;
+
+	cantp_logv("\t\tTWAI received %d bytes: ", rx_frame->dlc);
+	for (uint8_t i=0; i < rx_frame->dlc; i++) {
+		rx_frame->data_u8[i] = rx_msg.data[i];
+		cantp_logv("0x%02x ", rx_frame->data_u8[i]);
+	}
+	cantp_logv("\n");
+	return 0;
+
+#else
 	//casting to (can_frame_esp32_t *) is just for this implementation
 	//can driver of esp32
 	esp_err_t err = can_drv_esp32_rx((can_frame_esp32_t *)rx_frame, ticks_to_wait);
@@ -153,32 +171,103 @@ int cantp_can_rx(cantp_can_frame_t *rx_frame, uint32_t tout_us)
 	}
 	cantp_logv("\n");
 	return 0;
+
+#endif
 }
 
 int cantp_can_tx_nb(uint32_t id, uint8_t idt, uint8_t dlc, uint8_t *data)
 {
+	cantp_logv("\t\tTWAI Sending NB from ID=0x%06x IDt=%d DLC=%d :", id, idt, dlc);
+#if ESP32_IDF_CAN_HAL
+	twai_message_t tx_msg = {
+			.identifier = id,
+			.data_length_code = dlc,
+			.extd = idt,
+			.ss = 1,
+			.self = 0,
+			.rtr = 0
+	};
+
+	for (uint8_t i=0; i < dlc; i++) {
+		cantp_logv("0x%02x ", data[i]);
+		tx_msg.data[i] = data[i];
+	}
+	cantp_logv("\n"); fflush(0);
+	return (twai_transmit(&tx_msg, 1) == ESP_OK)?0:-1;
+#else
 	can_frame_esp32_t tx_frame = { 0 };
 	tx_frame.id = id;
 	tx_frame.idt = idt;
 	tx_frame.rtr = 0;
 	tx_frame.dlc = dlc;
-	cantp_logv("\t\tCANLL Sending from ID=0x%06x IDt=%d DLC=%d :", id, idt, dlc);
 	for (uint8_t i=0; i < dlc; i++) {
 		cantp_logv("0x%02x ", data[i]);
 		tx_frame.data_u8[i] = data[i];
 	}
 	cantp_logv("\n"); fflush(0);
 	return (can_drv_esp32_tx(&tx_frame) == ESP_OK)?0:-1;
+#endif
+}
+
+int cantp_sndr_wait_tx_done(cantp_rxtx_status_t *ctx, uint32_t tout_us)
+{
+#if ESP32_IDF_CAN_HAL
+	uint32_t alerts;
+	twai_reconfigure_alerts(TWAI_ALERT_TX_SUCCESS, NULL);
+
+	if (twai_read_alerts(&alerts, (tout_us/1000)/portTICK_PERIOD_MS) != ESP_OK) {
+		return -1;
+	}
+	if (alerts & TWAI_ALERT_TX_SUCCESS) {
+		return 0;
+	}
+	return -1;
+#else
+	esp_err_t res = can_drv_esp32_wait_tx_end((tout_us/1000)/portTICK_RATE_MS);
+	return (res == ESP_OK)?0:-1;
+#endif
 }
 
 int cantp_can_tx(uint32_t id, uint8_t idt, uint8_t dlc, uint8_t *data, long tout_us)
 {
+	cantp_logv("\t\tTWAI Sending from ID=0x%06x IDt=%d DLC=%d :", id, idt, dlc);
+#if ESP32_IDF_CAN_HAL
+	twai_message_t tx_msg = {
+			.identifier = id,
+			.data_length_code = dlc,
+			.extd = idt,
+			.ss = 1,
+			.self = 0,
+			.rtr = 0
+	};
+
+	for (uint8_t i=0; i < dlc; i++) {
+		cantp_logv("0x%02x ", data[i]);
+		tx_msg.data[i] = data[i];
+	}
+	cantp_logv("\n"); fflush(0);
+	esp_err_t res = twai_transmit(&tx_msg, 1);
+	if (res != ESP_OK) {
+		return -1;
+	}
+
+	uint32_t alerts;
+	twai_reconfigure_alerts(TWAI_ALERT_TX_SUCCESS, NULL);
+
+	if (twai_read_alerts(&alerts, (tout_us/1000)/portTICK_PERIOD_MS) != ESP_OK) {
+		return -1;
+	}
+	if (alerts & TWAI_ALERT_TX_SUCCESS) {
+		return 0;
+	}
+	return -1;
+#else
 	can_frame_esp32_t tx_frame;
 	tx_frame.id = id;
 	tx_frame.idt = idt;
 	tx_frame.rtr = 0;
 	tx_frame.dlc = dlc;
-	cantp_logv("\t\tCANLL Sending from ID=0x%06x IDt=%d DLC=%d :", id, idt, dlc);
+
 	for (uint8_t i=0; i < dlc; i++) {
 		cantp_logv("0x%02x ", data[i]);
 		tx_frame.data_u8[i] = data[i];
@@ -189,12 +278,8 @@ int cantp_can_tx(uint32_t id, uint8_t idt, uint8_t dlc, uint8_t *data, long tout
 
 	esp_err_t res = can_drv_esp32_wait_tx_end((tout_us/1000)/portTICK_RATE_MS);
 	return (res == ESP_OK)?0:-1;
-}
 
-int cantp_sndr_wait_tx_done(cantp_rxtx_status_t *ctx, uint32_t tout_us)
-{
-	esp_err_t res = can_drv_esp32_wait_tx_end((tout_us/1000)/portTICK_RATE_MS);
-	return (res == ESP_OK)?0:-1;
+#endif
 }
 
 int cantp_sndr_state_sem_take(cantp_rxtx_status_t *ctx, uint32_t tout_us)

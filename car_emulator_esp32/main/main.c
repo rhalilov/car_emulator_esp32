@@ -240,19 +240,20 @@ void app_main(void)
 										.rx_io = RX_GPIO_NUM,
 										.clkout_io = TWAI_IO_UNUSED,
 										.bus_off_io = TWAI_IO_UNUSED,
-										.tx_queue_len = 5,
+										.tx_queue_len = 0,//5,
 										.rx_queue_len = 5,
-										.alerts_enabled = TWAI_ALERT_NONE,
+										.alerts_enabled = TWAI_ALERT_TX_SUCCESS,//TWAI_ALERT_NONE,
 										.clkout_divider = 0,
 										.intr_flags = ESP_INTR_FLAG_LEVEL1
 									};
+
 	static twai_timing_config_t t_config = {
 										.brp = 8,
 										.tseg_1 = 15,
 										.tseg_2 = 4,
 										.sjw = 3,
 //										.sjw = 2,
-										.triple_sampling = true
+										.triple_sampling = false
 									};
 	static twai_filter_config_t f_config = {
 										.acceptance_code = 0,
@@ -261,11 +262,18 @@ void app_main(void)
 									};
 
 	t_config.triple_sampling = true;
-
+#if ESP32_IDF_CAN_HAL
+	ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
+#else
 	can_drv_esp32_init(&g_config, &t_config, &f_config);
+#endif
 	ESP_LOGI(CAN_TAG, "Driver installed");
 
+#if ESP32_IDF_CAN_HAL
+	ESP_ERROR_CHECK(twai_start());
+#else
 	can_drv_esp32_start();
+#endif
 	ESP_LOGI(CAN_TAG, "Driver started");
 
 	cantp_params_t sndr_params;
