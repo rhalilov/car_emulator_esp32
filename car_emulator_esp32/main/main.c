@@ -64,7 +64,48 @@ static const char *TAG = "wifi station";
 
 static int s_retry_num = 0;
 
-uint8_t can_flow_queue[5][8];
+static cantp_rxtx_status_t cantp_ctx;
+
+#if 1//STDIN
+#include "esp_vfs_dev.h"
+#include "driver/uart.h"
+
+static inline int stdin_getch(char *ch, TickType_t ticks_to_wait)
+{
+	return uart_read_bytes(CONFIG_ESP_CONSOLE_UART_NUM, ch, 1, ticks_to_wait);
+}
+
+int stdin_getstr(char *str, uint16_t len)
+{
+	char c;
+	uint16_t idx = 0;
+	while (idx < len) {
+		if (stdin_getch(&c, 1) <= 0) {
+			continue;
+		}
+		if (c == '\n' || c == '\r') {
+			str[idx] = '\0';
+			break;
+		} else if (c > 0 && c < 127) {
+			str[idx++] = c;
+			putchar(c);
+			fflush(stdout);
+		}
+	}
+	return idx;
+}
+
+void stdin_init(void)
+{
+    uart_driver_install( (uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM,
+                256,		//UART RX buffer size
+				0,			//UART TX buffer size
+				0,			//queue_size UART event queue size/depth
+				NULL,		//uart_queue UART event queue handle
+				0);
+//	esp_vfs_dev_uart_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
+}
+#endif
 
 static void event_handler(void* arg, esp_event_base_t event_base,
                                 int32_t event_id, void* event_data)
@@ -197,22 +238,16 @@ int cantp_rcvr_rx_ff_cb(uint32_t id, uint8_t idt, uint8_t **data, uint16_t len)
 //	fflush(0);
 }
 
-esp_err_t configure_stdin_stdout(void)
+void print_help()
 {
-    // Initialize VFS & UART so we can use std::cout/cin
-    setvbuf(stdin, NULL, _IONBF, 0);
-    /* Install UART driver for interrupt-driven reads and writes */
-    ESP_ERROR_CHECK( uart_driver_install( (uart_port_t)CONFIG_ESP_CONSOLE_UART_NUM,
-            256, 0, 0, NULL, 0) );
-    /* Tell VFS to use UART driver */
-    esp_vfs_dev_uart_use_driver(CONFIG_ESP_CONSOLE_UART_NUM);
-    esp_vfs_dev_uart_port_set_rx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CR);
-    /* Move the caret to the beginning of the next line on '\n' */
-    esp_vfs_dev_uart_port_set_tx_line_endings(CONFIG_ESP_CONSOLE_UART_NUM, ESP_LINE_ENDINGS_CRLF);
-    return ESP_OK;
+	printf("\n\tCommands:\n"
+						"go        start simulator\n"
+						"bpr=250   sets the baudrate to 250kbps\n"
+						"bpr=500   sets the baudrate to 500kbps\n"
+						"idt=STD   sets the ID type to Standard (11bit)\n"
+						"idt=EXT   sets the ID type to Extended (29bit)\n"
+						"help      this menu\n");
 }
-
-static cantp_rxtx_status_t cantp_ctx;
 
 void app_main(void)
 {
@@ -224,15 +259,11 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(ret);
 
+
+
 //    ESP_LOGI(TAG, "ESP_WIFI_MODE_STA");
 //    wifi_init_sta();
 //
-//	configure_stdin_stdout();
-//
-//	printf("\nSTART:");
-//	char input_str[30];
-//	fgets(input_str, 30, stdin);
-//	printf("%s\n GO!\n", input_str);
 
 	static twai_general_config_t g_config = {
 										.mode = TWAI_MODE_NORMAL,
@@ -247,23 +278,81 @@ void app_main(void)
 										.intr_flags = ESP_INTR_FLAG_LEVEL1
 									};
 
-	static twai_timing_config_t t_config = {
-										.brp = 8,
-										.tseg_1 = 15,
-										.tseg_2 = 4,
-										.sjw = 3,
-//										.sjw = 2,
-										.triple_sampling = false
-									};
+//	static twai_timing_config_t t_config = {
+//	static twai_timing_config_t t_config_500kb = {
+//										.brp = 8,
+//										.tseg_1 = 15,
+//										.tseg_2 = 4,
+//										.sjw = 3,
+////										.sjw = 2,
+//										.triple_sampling = false
+//									};
+
+	emulator_cfg_t ecfg;
+	ecfg.boadrate = CFG_500KBPS;
+	ecfg.id_type = CFG_STANDARD_ID;
+
+	twai_timing_config_t *t_config_p;
+
+	static twai_timing_config_t t_config_500kb = TWAI_TIMING_CONFIG_500KBITS();
+	static twai_timing_config_t t_config_250kb = TWAI_TIMING_CONFIG_250KBITS();
+
 	static twai_filter_config_t f_config = {
 										.acceptance_code = 0,
 										.acceptance_mask = 0xFFFFFFFF,
 										.single_filter = false
 									};
 
-	t_config.triple_sampling = true;
+	static emulator_ctx_t ectx;
+	ectx.cfg = &ecfg;
+
+    stdin_init();
+
+    print_help();
+
+    while (1) {
+		char line[30];
+		printf("\n\nCMD> "); fflush(stdout);
+		if (stdin_getstr(line, 30) <= 0) {
+			continue;
+		}
+		if (strstr("go", line) != NULL) {
+			printf("\nSTART\n");
+			break;
+		} else if (strstr("help", line) != NULL) {
+			print_help();
+		} else if (strstr("bpr=250", line) != NULL) {
+			printf("\nBaudrate set to 250kbps\n");
+			ecfg.boadrate = CFG_250KBPS;
+		} else if (strstr("bpr=500", line) != NULL) {
+			printf("\nBaudrate set to 500kbps\n");
+			ecfg.boadrate = CFG_500KBPS;
+		} else if (strstr("idt=STD", line) != NULL) {
+			printf("\nID type is Standard\n");
+			ecfg.id_type = CFG_STANDARD_ID;
+		} else if (strstr("idt=EXT", line) != NULL) {
+			printf("\nID type is Extended\n");
+			ecfg.id_type = CFG_EXTENDED_ID;
+		} else {
+			printf("\nWrong command\n");
+		}
+	}
+
+    switch (ecfg.boadrate) {
+    	case CFG_250KBPS:
+    		t_config_p = &t_config_250kb;
+    		break;
+    	case CFG_500KBPS:
+    		t_config_p = &t_config_500kb;
+    		break;
+    	default:
+    		t_config_p = &t_config_500kb;
+    }
+
+	t_config_p->triple_sampling = true;
+
 #if ESP32_IDF_CAN_HAL
-	ESP_ERROR_CHECK(twai_driver_install(&g_config, &t_config, &f_config));
+	ESP_ERROR_CHECK(twai_driver_install(&g_config, t_config_p, &f_config));
 #else
 	can_drv_esp32_init(&g_config, &t_config, &f_config);
 #endif
@@ -274,6 +363,7 @@ void app_main(void)
 #else
 	can_drv_esp32_start();
 #endif
+//	can_drv_esp32_regs_print();
 	ESP_LOGI(CAN_TAG, "Driver started");
 
 	cantp_params_t sndr_params;
@@ -291,7 +381,7 @@ void app_main(void)
     ESP_LOGI(TAG, "Created timer (%p)\n", sndr_timer);
     cantp_set_sndr_timer_ptr(sndr_timer, &cantp_ctx);
 
-    static emulator_ctx_t ectx;
+
     ectx.sem = xSemaphoreCreateBinary();
     cantp_ctx.cb_ctx = (void *)&ectx;
     ectx.cantp_ctx = &cantp_ctx;
@@ -299,6 +389,12 @@ void app_main(void)
 	if (cantp_rcvr_params_init(&cantp_ctx, &sndr_params, "Sender") < 0) {
 //		return EXIT_FAILURE;
 	}
+
+//	uint8_t data[8] = { 0 };
+//	for (uint8_t i=0; i < 3; i++) {
+//		cantp_can_tx(0xaaa, 0, 8, data, 0);
+//		vTaskDelay(2000/portTICK_PERIOD_MS);
+//	}
 
 	SemaphoreHandle_t sndr_state_sem = xSemaphoreCreateBinary();
 	cantp_ctx.sndr.state_sem = (void *)sndr_state_sem;

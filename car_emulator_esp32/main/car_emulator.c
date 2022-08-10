@@ -23,21 +23,29 @@ float vehicle_throttle = 30;
 char vehicle_vin[OBD2_VIN_LEN] = "ESP32OBD2EMULATOR";
 static uint8_t resp_vin[20];
 
-void createOBDResponse(obd2_frame_t *response, uint8_t service, uint8_t pid)
+void createOBDResponse(	obd2_frame_t *response,
+						uint8_t service,
+						uint8_t pid,
+						cfg_can_idt_t idt)
 {
-	response->id = 0x7E8;
-	response->idt = 0;
+	if (idt == CFG_STANDARD_ID) {
+		response->id = 0x7E8;
+		response->idt = 0;
+	} else {
+		response->id = 0x18DAF110;
+		response->idt = 1;
+	}
 	response->len = 2;
 	response->obd2_service = 0x40 + service; // Service (+ 0x40)
 	response->obd2_pid = pid; // PID
 }
 
-void respondToOBD1(uint8_t pid, cantp_rxtx_status_t *cantp_ctx)
+void respondToOBD1(uint8_t pid, emulator_ctx_t *ectx)
 {
 	printf("Responding to Service 1: PID 0x%02x ", pid);
 
 	obd2_frame_t resp;
-	createOBDResponse(&resp, 1, pid);
+	createOBDResponse(&resp, 1, pid, ectx->cfg->id_type);
 
 	switch (pid) {
 		case 0x00: // Supported PIDs
@@ -73,20 +81,24 @@ void respondToOBD1(uint8_t pid, cantp_rxtx_status_t *cantp_ctx)
 		case 0xE0:
 			printf(": Supported PIDS 01-%x\n", pid+0x1F);
 			resp.len += 4; // Number of data bytes
+			resp.obd2_d[0] = 0x00; // can_data[3] Data byte 0
+			resp.obd2_d[1] = 0x00; // can_data[4] Data byte 1
+			resp.obd2_d[2] = 0x00; // can_data[5] Data byte 2
+			resp.obd2_d[3] = 0x00; // can_data[6] Data byte 3
 			break;
 		default:
 			printf(": PID is not supported!\n");
 			return;
 	}
-	cantp_send(cantp_ctx, resp.id, resp.idt, resp.obd_data, resp.len);
+	cantp_send(ectx->cantp_ctx, resp.id, resp.idt, resp.obd_data, resp.len);
 }
 
-void respondToOBD9(uint8_t pid, void *params)
+void respondToOBD9(uint8_t pid, emulator_ctx_t *ectx)
 {
 	printf("Responding to Service 9: PID 0x%02x ", pid);
 
 	obd2_frame_t response;
-	createOBDResponse(&response, 9, pid);
+	createOBDResponse(&response, 9, pid, ectx->cfg->id_type);
 
 	switch (pid) {
 		case 0x00: {// Supported PIDs
@@ -96,7 +108,7 @@ void respondToOBD9(uint8_t pid, void *params)
 			response.obd2_d[1] = 0x00; // Data byte 2
 			response.obd2_d[2] = 0x00; // Data byte 3
 			response.obd2_d[3] = 0x00; // Data byte 4
-			cantp_send((cantp_rxtx_status_t *)params, response.id, response.idt,
+			cantp_send(ectx->cantp_ctx, response.id, response.idt,
 													response.obd_data, response.len);
 		}; break;
 		case 0x02: // Vehicle Identification Number (VIN)
@@ -105,7 +117,7 @@ void respondToOBD9(uint8_t pid, void *params)
 			obd2_frame_t *res_vin_p;
 			res_vin_p = (obd2_frame_t *)resp_vin;
 
-			createOBDResponse(res_vin_p, 9, pid);
+			createOBDResponse(res_vin_p, 9, pid, ectx->cfg->id_type);
 
 			res_vin_p->obd2_d[0] = 1;
 
@@ -117,7 +129,7 @@ void respondToOBD9(uint8_t pid, void *params)
 			printf("\n"); fflush(0);
 
 			res_vin_p->len += OBD2_VIN_LEN + 1;
-			cantp_send((cantp_rxtx_status_t *)params, res_vin_p->id, res_vin_p->idt,
+			cantp_send(ectx->cantp_ctx, res_vin_p->id, res_vin_p->idt,
 													res_vin_p->obd_data, res_vin_p->len);
 //			// Initiate multi-frame message packet
 //			response.can_data[0] = 0x10; // FF (First Frame, ISO_15765-2)
@@ -161,6 +173,7 @@ void respondToOBD9(uint8_t pid, void *params)
 void can_check_rx_frame(emulator_ctx_t *ectx)
 {
 	obd2_frame_t obd_rx_frame = { 0 };
+
 	obd_rx_frame.id = ectx->id;
 	obd_rx_frame.idt = ectx->idt;
 	if (ectx->len > 7) {
@@ -172,18 +185,32 @@ void can_check_rx_frame(emulator_ctx_t *ectx)
 
 	free(ectx->data);
 
+	uint32_t tester_id;
+	switch (ectx->cfg->id_type) {
+	case CFG_STANDARD_ID:
+		tester_id = 0x7df;
+		break;
+	case CFG_EXTENDED_ID:
+		tester_id = 0x18DB33F1;
+		break;
+	default:
+		printf("ERROR: Tester ID Type is not correct: %d", ectx->cfg->id_type);
+		tester_id = 0x7df;
+		break;
+	}
+
 	printf("====================================OBD2======================================\n");
 	// Check if frame is OBD query
-	if (obd_rx_frame.idt == 0) {
-		// 11 bits ID
-		if (obd_rx_frame.id == 0x7df) {
+	if (obd_rx_frame.idt == ectx->cfg->id_type) {
+		// Compare the bits ID
+		if (obd_rx_frame.id == tester_id) {
 			printf("OBD QUERY !\n");
 			switch (obd_rx_frame.obd2_service) {
 				case 1:
-					respondToOBD1(obd_rx_frame.obd2_pid, ectx->cantp_ctx);
+					respondToOBD1(obd_rx_frame.obd2_pid, ectx);
 					break;
 				case 9:
-					respondToOBD9(obd_rx_frame.obd2_pid, ectx->cantp_ctx);
+					respondToOBD9(obd_rx_frame.obd2_pid, ectx);
 					break;
 				default:
 					printf("Unsupported Service %d !\n", obd_rx_frame.obd2_service);

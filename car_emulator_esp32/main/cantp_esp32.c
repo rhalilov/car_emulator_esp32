@@ -218,6 +218,7 @@ int cantp_sndr_wait_tx_done(cantp_rxtx_status_t *ctx, uint32_t tout_us)
 	if (twai_read_alerts(&alerts, (tout_us/1000)/portTICK_PERIOD_MS) != ESP_OK) {
 		return -1;
 	}
+	printf("--%d--", alerts);fflush(0);
 	if (alerts & TWAI_ALERT_TX_SUCCESS) {
 		return 0;
 	}
@@ -257,6 +258,7 @@ int cantp_can_tx(uint32_t id, uint8_t idt, uint8_t dlc, uint8_t *data, long tout
 	if (twai_read_alerts(&alerts, (tout_us/1000)/portTICK_PERIOD_MS) != ESP_OK) {
 		return -1;
 	}
+	printf("-----%d-----", alerts);fflush(0);
 	if (alerts & TWAI_ALERT_TX_SUCCESS) {
 		return 0;
 	}
